@@ -1,0 +1,680 @@
+
+--========================================================
+-- 🌈 REXZ HUB | GOLD BOMB + COILS + RAINBOW CARPET
+-- Roblox Studio Lite
+-- Location: StarterPlayer > StarterPlayerScripts
+--========================================================
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- SETTINGS
+local cooldown = 3
+local bombColor = Color3.fromRGB(212,170,55)
+local effectColor = Color3.fromRGB(255,205,80)
+local GREEN = Color3.fromRGB(164,211,151)
+local BLACK = Color3.fromRGB(31,29,25)
+local WHITE = Color3.fromRGB(255,255,255)
+local DARK_GOLD = Color3.fromRGB(133,95,25)
+
+local activeBombs = {}
+local lastUse = -math.huge
+local busy = false
+local opened = false
+local animating = false
+local restoring = false
+
+local coilTools = {
+    ["Speed Coil"] = false,
+    ["Gravity Coil"] = false,
+    ["Rainbow Flying Carpet"] = false
+}
+
+local flightActive = false
+local flightObjects = {}
+local verticalInput = 0
+local flightGeneration = 0
+
+local colors = {
+    {Name="Gold",Color=Color3.fromRGB(212,170,55)},
+    {Name="Red",Color=Color3.fromRGB(220,65,65)},
+    {Name="Blue",Color=Color3.fromRGB(65,135,235)},
+    {Name="Green",Color=Color3.fromRGB(70,180,100)},
+    {Name="Purple",Color=Color3.fromRGB(160,85,220)},
+    {Name="Pink",Color=Color3.fromRGB(245,120,180)},
+    {Name="White",Color=Color3.fromRGB(240,240,240)},
+    {Name="Black",Color=Color3.fromRGB(35,35,40)},
+    {Name="Orange",Color=Color3.fromRGB(255,145,40)},
+    {Name="Cyan",Color=Color3.fromRGB(50,210,220)}
+}
+
+-- REMOVE OLD GUI
+local oldGui = playerGui:FindFirstChild("GoldBombUI")
+if oldGui then oldGui:Destroy() end
+
+local oldFlightGui = playerGui:FindFirstChild("CarpetFlightControls")
+if oldFlightGui then oldFlightGui:Destroy() end
+
+--========================================================
+-- 💣 GOLD FAKE BOMB
+--========================================================
+
+local function makeBomb(parent,name)
+    local bomb = Instance.new("Part")
+    bomb.Name = name or "Handle"
+    bomb.Size = Vector3.new(1.45,0.85,1.8)
+    bomb.Color = bombColor
+    bomb.Material = Enum.Material.Metal
+    bomb.Anchored = false
+    bomb.CanCollide = true
+    bomb.Parent = parent
+
+    local cap = Instance.new("Part")
+    cap.Name = "BombCap"
+    cap.Size = Vector3.new(0.42,0.18,0.42)
+    cap.Color = bombColor:Lerp(DARK_GOLD,0.45)
+    cap.Material = Enum.Material.Metal
+    cap.CanCollide = false
+    cap.Massless = true
+    cap.CFrame = bomb.CFrame*CFrame.new(0,0.49,0)
+    cap.Parent = parent
+
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = bomb
+    weld.Part1 = cap
+    weld.Parent = cap
+
+    return bomb
+end
+
+local function recolorBombs()
+    for bomb in pairs(activeBombs) do
+        if bomb and bomb.Parent then
+            bomb.Color = bombColor
+            local cap = bomb:FindFirstChild("BombCap")
+            if cap then cap.Color = bombColor:Lerp(DARK_GOLD,0.45) end
+        else
+            activeBombs[bomb] = nil
+        end
+    end
+
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    local character = player.Character
+    local tool = backpack and backpack:FindFirstChild("Gold Fake Bomb")
+    if not tool and character then
+        tool = character:FindFirstChild("Gold Fake Bomb")
+    end
+
+    local handle = tool and tool:FindFirstChild("Handle")
+    if handle then
+        handle.Color = bombColor
+        local cap = handle:FindFirstChild("BombCap")
+        if cap then cap.Color = bombColor:Lerp(DARK_GOLD,0.45) end
+    end
+end
+
+local function createExplosion(position)
+    local effect = Instance.new("Part")
+    effect.Name = "GoldBombExplosionEffect"
+    effect.Shape = Enum.PartType.Ball
+    effect.Size = Vector3.new(1,1,1)
+    effect.Position = position
+    effect.Anchored = true
+    effect.CanCollide = false
+    effect.CanTouch = false
+    effect.CanQuery = false
+    effect.Material = Enum.Material.Neon
+    effect.Color = effectColor
+    effect.Transparency = 0.15
+    effect.Parent = workspace
+
+    local attachment = Instance.new("Attachment",effect)
+    local particles = Instance.new("ParticleEmitter",attachment)
+    particles.Color = ColorSequence.new(effectColor)
+    particles.Lifetime = NumberRange.new(0.3,0.7)
+    particles.Speed = NumberRange.new(5,11)
+    particles.SpreadAngle = Vector2.new(180,180)
+    particles.Rate = 0
+    particles.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0,0.3),
+        NumberSequenceKeypoint.new(1,0)
+    })
+    particles:Emit(28)
+
+    TweenService:Create(effect,TweenInfo.new(0.45),{
+        Size = Vector3.new(8,8,8),
+        Transparency = 1
+    }):Play()
+
+    Debris:AddItem(effect,1)
+end
+
+local function createBombTool()
+    local backpack = player:WaitForChild("Backpack")
+    local character = player.Character
+
+    if backpack:FindFirstChild("Gold Fake Bomb")
+        or (character and character:FindFirstChild("Gold Fake Bomb")) then
+        return
+    end
+
+    local tool = Instance.new("Tool")
+    tool.Name = "Gold Fake Bomb"
+    tool.ToolTip = "Tap to drop a fake bomb"
+    tool.RequiresHandle = true
+    tool.CanBeDropped = false
+
+    local handle = makeBomb(tool,"Handle")
+    handle.Massless = true
+    handle.CanCollide = false
+    tool.Grip = CFrame.new(0,-0.2,-0.2)
+
+    tool.Activated:Connect(function()
+        if busy or os.clock()-lastUse < cooldown then return end
+
+        local char = player.Character
+        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not humanoid or humanoid.Health <= 0 or not root then return end
+
+        busy = true
+        lastUse = os.clock()
+
+        local dropped = makeBomb(workspace,"DroppedGoldFakeBomb")
+        dropped.CFrame = root.CFrame*CFrame.new(0,-2.7,-0.7)
+        activeBombs[dropped] = true
+        dropped.AssemblyLinearVelocity =
+            root.AssemblyLinearVelocity+root.CFrame.LookVector*1.5
+
+        task.delay(0.8,function()
+            if dropped and dropped.Parent then
+                createExplosion(dropped.Position)
+                activeBombs[dropped] = nil
+                dropped:Destroy()
+            end
+        end)
+
+        task.delay(math.max(cooldown,0.1),function()
+            busy = false
+        end)
+    end)
+
+    tool.Parent = backpack
+end
+
+--========================================================
+-- 🌀 COILS
+--========================================================
+
+local function findTool(name)
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    local character = player.Character
+    return (backpack and backpack:FindFirstChild(name))
+        or (character and character:FindFirstChild(name))
+end
+
+local function createCoil(kind)
+    local name = kind.." Coil"
+    if findTool(name) then return false end
+
+    local isSpeed = kind == "Speed"
+    local color = isSpeed
+        and Color3.fromRGB(235,65,65)
+        or Color3.fromRGB(65,145,255)
+
+    local tool = Instance.new("Tool")
+    tool.Name = name
+    tool.ToolTip = "Equip to activate "..name
+    tool.RequiresHandle = true
+    tool.CanBeDropped = false
+
+    local handle = Instance.new("Part")
+    handle.Name = "Handle"
+    handle.Size = Vector3.new(0.4,1.2,0.4)
+    handle.Shape = Enum.PartType.Cylinder
+    handle.Color = color
+    handle.Material = Enum.Material.SmoothPlastic
+    handle.CanCollide = false
+    handle.Massless = true
+    handle.Parent = tool
+
+    for i=1,12 do
+        local angle = i*math.pi*0.8
+        local segment = Instance.new("Part")
+        segment.Name = "SpringSegment"
+        segment.Shape = Enum.PartType.Ball
+        segment.Size = Vector3.new(0.22,0.22,0.22)
+        segment.Color = color
+        segment.Material = Enum.Material.SmoothPlastic
+        segment.CanCollide = false
+        segment.Massless = true
+        segment.CFrame = handle.CFrame*CFrame.new(
+            math.cos(angle)*0.25,
+            -0.5+(i-1)*0.09,
+            math.sin(angle)*0.25
+        )
+        segment.Parent = tool
+
+        local weld = Instance.new("WeldConstraint")
+        weld.Part0 = handle
+        weld.Part1 = segment
+        weld.Parent = segment
+    end
+
+    local equipped = false
+    local humanoid
+    local oldSpeed
+    local oldGravity
+
+    local function deactivate()
+        if not equipped then return end
+        equipped = false
+
+        if isSpeed then
+            if humanoid and humanoid.Parent then
+                humanoid.WalkSpeed = oldSpeed or 16
+            end
+        else
+            workspace.Gravity = oldGravity or 196.2
+        end
+
+        humanoid = nil
+    end
+
+    tool.Equipped:Connect(function()
+        local char = player.Character
+        local h = char and char:FindFirstChildOfClass("Humanoid")
+        if not h or h.Health <= 0 then return end
+
+        humanoid = h
+        equipped = true
+
+        if isSpeed then
+            oldSpeed = h.WalkSpeed
+            h.WalkSpeed = 32
+        else
+            oldGravity = workspace.Gravity
+            workspace.Gravity = 100
+        end
+    end)
+
+    tool.Unequipped:Connect(deactivate)
+    tool.Destroying:Connect(deactivate)
+    tool.Parent = player:WaitForChild("Backpack")
+    return true
+end
+
+--========================================================
+-- 🌈 RAINBOW FLYING CARPET
+--========================================================
+
+local rainbowColors = {
+    Color3.fromRGB(235,70,70),
+    Color3.fromRGB(255,145,55),
+    Color3.fromRGB(250,220,85),
+    Color3.fromRGB(100,195,110),
+    Color3.fromRGB(75,155,235),
+    Color3.fromRGB(125,95,210),
+    Color3.fromRGB(205,115,205)
+}
+
+local function stopFlight()
+    flightActive = false
+    flightGeneration += 1
+    verticalInput = 0
+
+    for _,object in ipairs(flightObjects) do
+        if object and object.Parent then
+            object:Destroy()
+        end
+    end
+    table.clear(flightObjects)
+
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+
+    if root then
+        root.AssemblyLinearVelocity = Vector3.zero
+    end
+
+    if humanoid then
+        humanoid.PlatformStand = false
+        humanoid.AutoRotate = true
+        humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end
+
+    local flightGui = playerGui:FindFirstChild("CarpetFlightControls")
+    if flightGui then flightGui.Enabled = false end
+end
+
+local function startFlight()
+    if flightActive then
+        stopFlight()
+        return
+    end
+
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+
+    if not root or not humanoid or humanoid.Health <= 0 then return end
+
+    flightActive = true
+    flightGeneration += 1
+    local myGeneration = flightGeneration
+
+    humanoid.AutoRotate = false
+    humanoid.PlatformStand = true
+
+    -- Carpet base
+    local carpet = Instance.new("Part")
+    carpet.Name = "LocalRainbowFlyingCarpet"
+    carpet.Size = Vector3.new(5,0.22,3)
+    carpet.Material = Enum.Material.SmoothPlastic
+    carpet.Color = rainbowColors[1]
+    carpet.CanCollide = false
+    carpet.Massless = true
+    carpet.Anchored = false
+    carpet.CFrame = root.CFrame*CFrame.new(0,-3.1,0)
+    carpet.Parent = workspace
+    table.insert(flightObjects,carpet)
+
+    local weld = Instance.new("WeldConstraint")
+    weld.Part0 = root
+    weld.Part1 = carpet
+    weld.Parent = carpet
+
+    -- Rainbow stripes
+    for i,color in ipairs(rainbowColors) do
+        local stripe = Instance.new("Part")
+        stripe.Name = "RainbowStripe"
+        stripe.Size = Vector3.new(5/7,0.07,3)
+        stripe.Color = color
+        stripe.Material = Enum.Material.SmoothPlastic
+        stripe.CanCollide = false
+        stripe.Massless = true
+        stripe.Anchored = false
+        stripe.CFrame = carpet.CFrame*CFrame.new((i-4)*5/7,0.14,0)
+        stripe.Parent = workspace
+        table.insert(flightObjects,stripe)
+
+        local stripeWeld = Instance.new("WeldConstraint")
+        stripeWeld.Part0 = carpet
+        stripeWeld.Part1 = stripe
+        stripeWeld.Parent = stripe
+    end
+
+    -- Flight movers
+    local velocity = Instance.new("BodyVelocity")
+    velocity.Name = "CarpetFlightVelocity"
+    velocity.MaxForce = Vector3.new(1e7,1e7,1e7)
+    velocity.P = 15000
+    velocity.Velocity = Vector3.zero
+    velocity.Parent = root
+    table.insert(flightObjects,velocity)
+
+    local gyro = Instance.new("BodyGyro")
+    gyro.Name = "CarpetFlightGyro"
+    gyro.MaxTorque = Vector3.new(1e7,1e7,1e7)
+    gyro.P = 18000
+    gyro.D = 800
+    gyro.CFrame = root.CFrame
+    gyro.Parent = root
+    table.insert(flightObjects,gyro)
+
+    local flightGui = playerGui:FindFirstChild("CarpetFlightControls")
+    if flightGui then flightGui.Enabled = true end
+
+    task.spawn(function()
+        while flightActive
+            and flightGeneration == myGeneration
+            and root.Parent
+            and humanoid.Health > 0 do
+
+            local camera = workspace.CurrentCamera
+            local move = humanoid.MoveDirection
+            local horizontal = Vector3.zero
+
+            if camera then
+                local look = camera.CFrame.LookVector
+                local right = camera.CFrame.RightVector
+                local forward = Vector3.new(look.X,0,look.Z)
+                local side = Vector3.new(right.X,0,right.Z)
+
+                if forward.Magnitude > 0 then forward = forward.Unit end
+                if side.Magnitude > 0 then side = side.Unit end
+
+                horizontal = forward*move:Dot(forward)
+                    + side*move:Dot(side)
+
+                if horizontal.Magnitude > 1 then
+                    horizontal = horizontal.Unit
+                end
+
+                velocity.Velocity =
+                    horizontal*55+Vector3.new(0,verticalInput*35,0)
+
+                if horizontal.Magnitude > 0.1 then
+                    gyro.CFrame = CFrame.lookAt(
+                        root.Position,root.Position+horizontal
+                    )
+                else
+                    gyro.CFrame = CFrame.new(
+                        root.Position,
+                        root.Position+Vector3.new(
+                            camera.CFrame.LookVector.X,0,
+                            camera.CFrame.LookVector.Z
+                        )
+                    )
+                end
+            end
+
+            RunService.Heartbeat:Wait()
+        end
+
+        if flightActive and flightGeneration == myGeneration then
+            stopFlight()
+        end
+    end)
+end
+
+--========================================================
+-- 📱 MOBILE FLIGHT BUTTONS
+--========================================================
+
+local function createFlightControls()
+    local flightGui = Instance.new("ScreenGui")
+    flightGui.Name = "CarpetFlightControls"
+    flightGui.ResetOnSpawn = false
+    flightGui.Enabled = false
+    flightGui.DisplayOrder = 30
+    flightGui.Parent = playerGui
+
+    local function makeControl(text,position,callback)
+        local button = Instance.new("TextButton")
+        button.Size = UDim2.fromOffset(82,48)
+        button.Position = position
+        button.BackgroundColor3 = GREEN
+        button.BackgroundTransparency = 0.08
+        button.Text = text
+        button.TextColor3 = BLACK
+        button.TextSize = 16
+        button.Font = Enum.Font.GothamBold
+        button.AutoButtonColor = true
+        button.Parent = flightGui
+
+        Instance.new("UICorner",button).CornerRadius =
+            UDim.new(0,12)
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = WHITE
+        stroke.Thickness = 1.5
+        stroke.Parent = button
+
+        button.Activated:Connect(callback)
+        return button
+    end
+
+    -- Hold UP to ascend; release to stop vertical movement
+    local upButton = makeControl(
+        "▲ UP",
+        UDim2.new(1,-100,0.43,0),
+        function() end
+    )
+
+    -- Hold DOWN to descend; release to stop vertical movement
+    local downButton = makeControl(
+        "▼ DOWN",
+        UDim2.new(1,-100,0.55,0),
+        function() end
+    )
+
+    local stopButton = makeControl(
+        "■ STOP",
+        UDim2.new(1,-100,0.67,0),
+        function()
+            verticalInput = 0
+        end
+    )
+
+    local landButton = makeControl(
+        "LAND",
+        UDim2.new(1,-100,0.79,0),
+        stopFlight
+    )
+
+    local function bindHold(button,value)
+        button.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                verticalInput = value
+            end
+        end)
+
+        button.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if verticalInput == value then
+                    verticalInput = 0
+                end
+            end
+        end)
+    end
+
+    bindHold(upButton,1)
+    bindHold(downButton,-1)
+
+    -- Clear vertical movement if touch ends elsewhere
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            verticalInput = 0
+        end
+    end)
+end
+
+createFlightControls()
+
+local function createFlyingCarpetTool()
+    local name = "Rainbow Flying Carpet"
+    if findTool(name) then return false end
+
+    local tool = Instance.new("Tool")
+    tool.Name = name
+    tool.ToolTip = "Tap to fly or stop flying"
+    tool.RequiresHandle = true
+    tool.CanBeDropped = false
+
+    local handle = Instance.new("Part")
+    handle.Name = "Handle"
+    handle.Size = Vector3.new(1,0.25,1)
+    handle.Transparency = 1
+    handle.CanCollide = false
+    handle.Massless = true
+    handle.Parent = tool
+
+    tool.Activated:Connect(startFlight)
+
+    tool.Unequipped:Connect(function()
+        if flightActive then stopFlight() end
+    end)
+
+    tool.Destroying:Connect(function()
+        if flightActive then stopFlight() end
+    end)
+
+    tool.Parent = player:WaitForChild("Backpack")
+    return true
+end
+
+--========================================================
+-- ➕ ADD / REMOVE TOOLS
+--========================================================
+
+local function addTool(name)
+    if findTool(name) then return false end
+
+    local success = false
+
+    if name == "Speed Coil" then
+        success = createCoil("Speed")
+    elseif name == "Gravity Coil" then
+        success = createCoil("Gravity")
+    elseif name == "Rainbow Flying Carpet" then
+        success = createFlyingCarpetTool()
+    end
+
+    if success then coilTools[name] = true end
+    return success
+end
+
+local function removeTool(name)
+    local tool = findTool(name)
+    if tool then tool:Destroy() end
+    coilTools[name] = false
+end
+
+--========================================================
+-- 🔄 RESPAWN SUPPORT
+--========================================================
+
+local function restoreTools()
+    if restoring then return end
+    restoring = true
+
+    task.spawn(function()
+        local character = player.Character or player.CharacterAdded:Wait()
+        player:WaitForChild("Backpack")
+        task.wait(1)
+
+        if player.Character == character then
+            createBombTool()
+
+            for name,enabled in pairs(coilTools) do
+                if enabled and not findTool(name) then
+                    addTool(name)
+                end
+            end
+        end
+
+        restoring = false
+    end)
+end
+
+player.CharacterAdded:Connect(function()
+    if flightActive then stopFlight() end
+    restoreTools()
+end)
+
+restoreTools()
+
+--========================================================
+-- 🍃 SETTINGS GUI
+--============================================
